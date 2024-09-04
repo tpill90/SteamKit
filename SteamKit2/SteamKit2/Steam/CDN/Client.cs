@@ -16,7 +16,7 @@ namespace SteamKit2.CDN
     /// <summary>
     /// The <see cref="Client"/> class is used for downloading game content from the Steam servers.
     /// </summary>
-    public sealed class Client : IDisposable
+    public partial class Client : IDisposable
     {
         HttpClient httpClient;
 
@@ -28,7 +28,6 @@ namespace SteamKit2.CDN
         /// Default timeout to use when reading the response body
         /// </summary>
         public static TimeSpan ResponseBodyTimeout { get; set; } = TimeSpan.FromSeconds( 60 );
-
 
         /// <summary>
         /// Initializes a new instance of the <see cref="Client"/> class.
@@ -230,18 +229,26 @@ namespace SteamKit2.CDN
             var chunkID = Utils.EncodeHexString( chunk.ChunkID );
             var url = $"depot/{depotId}/chunk/{chunkID}";
 
-            using var request = new HttpRequestMessage( HttpMethod.Get, BuildCommand( server, url, cdnAuthToken, proxyServer ) );
+            var builtUrl = BuildCommand( server, url, cdnAuthToken, proxyServer );
+            var request = new HttpRequestMessage( HttpMethod.Get, builtUrl );
+            if ( UseLancacheServer )
+            {
+                request = BuildLancacheRequest( server, url, cdnAuthToken );
+            }
 
             using var cts = new CancellationTokenSource();
             cts.CancelAfter( RequestTimeout );
 
             try
             {
-                using var response = await httpClient.SendAsync( request, HttpCompletionOption.ResponseHeadersRead, cts.Token ).ConfigureAwait( false );
+                using var response = await httpClient
+                    .SendAsync( request, HttpCompletionOption.ResponseHeadersRead, cts.Token ).ConfigureAwait( false );
 
                 if ( !response.IsSuccessStatusCode )
                 {
-                    throw new SteamKitWebRequestException( $"Response status code does not indicate success: {response.StatusCode:D} ({response.ReasonPhrase}).", response );
+                    throw new SteamKitWebRequestException(
+                        $"Response status code does not indicate success: {response.StatusCode:D} ({response.ReasonPhrase}).",
+                        response );
                 }
 
                 var contentLength = ( int )chunk.CompressedLength;
@@ -253,16 +260,19 @@ namespace SteamKit2.CDN
                     // assert that lengths match only if the chunk has a length assigned.
                     if ( chunk.CompressedLength > 0 && contentLength != chunk.CompressedLength )
                     {
-                        throw new InvalidDataException( $"Content-Length mismatch for depot chunk! (was {contentLength}, but should be {chunk.CompressedLength})" );
+                        throw new InvalidDataException(
+                            $"Content-Length mismatch for depot chunk! (was {contentLength}, but should be {chunk.CompressedLength})" );
                     }
                 }
                 else if ( contentLength > 0 )
                 {
-                    DebugLog.WriteLine( nameof( CDN ), $"Response does not have Content-Length, falling back to chunk.CompressedLength." );
+                    DebugLog.WriteLine( nameof(CDN),
+                        $"Response does not have Content-Length, falling back to chunk.CompressedLength." );
                 }
                 else
                 {
-                    throw new SteamKitWebRequestException( "Response does not have Content-Length and chunk.CompressedLength is not set.", response );
+                    throw new SteamKitWebRequestException(
+                        "Response does not have Content-Length and chunk.CompressedLength is not set.", response );
                 }
 
                 cts.CancelAfter( ResponseBodyTimeout );
@@ -277,7 +287,8 @@ namespace SteamKit2.CDN
 
                     if ( ms.Position != contentLength )
                     {
-                        throw new InvalidDataException( $"Length mismatch after downloading depot chunk! (was {ms.Position}, but should be {contentLength})" );
+                        throw new InvalidDataException(
+                            $"Length mismatch after downloading depot chunk! (was {ms.Position}, but should be {contentLength})" );
                     }
 
                     return contentLength;
@@ -295,11 +306,13 @@ namespace SteamKit2.CDN
 
                     if ( ms.Position != contentLength )
                     {
-                        throw new InvalidDataException( $"Length mismatch after downloading depot chunk! (was {ms.Position}, but should be {contentLength})" );
+                        throw new InvalidDataException(
+                            $"Length mismatch after downloading depot chunk! (was {ms.Position}, but should be {contentLength})" );
                     }
 
                     // process the chunk immediately
-                    var writtenLength = DepotChunk.Process( chunk, buffer.AsSpan()[ ..contentLength ], destination, depotKey );
+                    var writtenLength = DepotChunk.Process( chunk, buffer.AsSpan()[ ..contentLength ], destination,
+                        depotKey );
 
                     return writtenLength;
                 }
@@ -310,8 +323,13 @@ namespace SteamKit2.CDN
             }
             catch ( Exception ex )
             {
-                DebugLog.WriteLine( nameof( CDN ), $"Failed to download a depot chunk {request.RequestUri}: {ex.Message}" );
+                DebugLog.WriteLine( nameof(CDN),
+                    $"Failed to download a depot chunk {request.RequestUri}: {ex.Message}" );
                 throw;
+            }
+            finally
+            {
+                request.Dispose();
             }
         }
 
